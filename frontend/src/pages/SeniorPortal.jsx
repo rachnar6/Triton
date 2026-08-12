@@ -374,6 +374,7 @@ const CATEGORIES = [
   { key: 'FIX_BULBS', Icon: IconBulb, label: 'Fix & Bulbs', hint: 'Hard-to-reach lights, minor fixes' },
   { key: 'TECH_HELP', Icon: IconSmartphone, label: 'Phone & Tech Help', hint: 'Smartphone setup, Wi-Fi troubleshooting' },
   { key: 'PET_CARE', Icon: IconPaw, label: 'Pet & Walk Care', hint: 'Dog walking, feeding assistance' },
+  { key: 'OTHER', Icon: IconSparkles, label: 'Other Request', hint: 'Something else not listed here' },
 ];
 
 // Rating-modal dismissals are remembered here so a completed-but-unrated
@@ -459,6 +460,8 @@ export default function SeniorPortal() {
   const [volunteersData, setVolunteersData] = useState({ sameSubRegion: [], otherSubRegions: [] });
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState(null);
+  const [customCategory, setCustomCategory] = useState('');
+  const [scheduledTime, setScheduledTime] = useState('');
   const [showCategories, setShowCategories] = useState(false);
   const [description, setDescription] = useState('');
   const [listening, setListening] = useState(false);
@@ -584,6 +587,7 @@ const hasActiveTask = task && ['PENDING', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'IN
     if (e) e.preventDefault();
     setError('');
     if (!category) return setError('Please select what kind of help you need.');
+    if (category === 'OTHER' && !customCategory.trim()) return setError('Please specify your custom category.');
     if (!description.trim()) return setError('Please describe your request, by speaking or typing.');
 
     setSubmitting(true);
@@ -591,20 +595,25 @@ const hasActiveTask = task && ['PENDING', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'IN
     const sendApiRequest = async (lat, lng) => {
       try {
         const payload = {
-          category,
+          category: category === 'OTHER' ? customCategory.trim() : category,
           description,
           urgency: 'MEDIUM',
           latitude: lat,
           longitude: lng,
         };
+        if (scheduledTime) {
+          payload.scheduledTime = scheduledTime;
+        }
         if (invitedVolunteerId) {
           payload.invitedVolunteer = invitedVolunteerId;
         }
 
         await api.createTask(payload, token);
         setCategory(null);
+        setCustomCategory('');
         setShowCategories(false);
         setDescription('');
+        setScheduledTime('');
         setSelectedVolunteer(null);
         refresh();
       } catch (err) {
@@ -733,7 +742,7 @@ const hasActiveTask = task && ['PENDING', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'IN
                             Selected category
                           </span>
                           <span style={{ display: 'block', fontSize: 19, fontWeight: 800, color: COLOR.navyDark }}>
-                            {selectedCategoryMeta.label}
+                            {category === 'OTHER' && customCategory.trim() ? customCategory : selectedCategoryMeta.label}
                           </span>
                         </span>
                       </span>
@@ -859,6 +868,19 @@ const hasActiveTask = task && ['PENDING', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'IN
                     </>
                   )}
 
+                  {category === 'OTHER' && (
+                    <div style={{ marginTop: 16 }}>
+                      <label style={S.label}>Specify your request category <span style={{color: COLOR.red}}>*</span></label>
+                      <input
+                        type="text"
+                        style={{ ...S.textarea, height: 60, fontSize: 18 }}
+                        value={customCategory}
+                        onChange={(e) => setCustomCategory(e.target.value)}
+                        placeholder="e.g. Gardening, Organizing, Reading..."
+                      />
+                    </div>
+                  )}
+
                   <h2 style={S.h2}>Step 2 — Tell us more</h2>
                   <button
                     type="button"
@@ -880,6 +902,42 @@ const hasActiveTask = task && ['PENDING', 'ASSIGNED', 'EN_ROUTE', 'ARRIVED', 'IN
                       placeholder="Example: I need help carrying groceries from the market to my house"
                       style={S.textarea}
                     />
+                  </div>
+
+                  {/* Scheduling: optional date+time picker */}
+                  <div style={{ marginBottom: 6 }}>
+                    <label style={S.label}>Schedule for a specific time? (optional)</label>
+                    <input
+                      type="datetime-local"
+                      className="sp-focusable"
+                      value={scheduledTime}
+                      min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                      onChange={(e) => setScheduledTime(e.target.value)}
+                      style={{
+                        width: '100%',
+                        fontFamily: FONT,
+                        fontSize: 18,
+                        padding: 14,
+                        borderRadius: 12,
+                        border: `2px solid ${COLOR.border}`,
+                        boxSizing: 'border-box',
+                        background: scheduledTime ? '#eff6ff' : COLOR.card,
+                        color: scheduledTime ? '#1d4ed8' : COLOR.text,
+                        fontWeight: scheduledTime ? 700 : 400,
+                      }}
+                    />
+                    {scheduledTime && (
+                      <div style={{ fontSize: 14, color: '#1d4ed8', marginTop: 6, fontWeight: 600 }}>
+                        📅 Booking for: {new Date(scheduledTime).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        <button
+                          type="button"
+                          onClick={() => setScheduledTime('')}
+                          style={{ marginLeft: 10, background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
+                        >
+                          ✕ Clear
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -1141,6 +1199,11 @@ function VolunteerCard({ vol, isExactMatch, isInvited, onSelect, onNeedHelp }) {
             {vol.subRegion ? `${vol.subRegion}, ` : ''}
             {vol.city}
           </span>
+          {vol.bookings && vol.bookings.length > 0 && (
+            <span style={{ color: '#0369a1', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4, background: '#e0f2fe', padding: '2px 6px', borderRadius: 6, fontSize: 12, marginTop: 4, width: 'fit-content' }}>
+              📅 Booked: {vol.bookings.map(b => new Date(b).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })).join(', ')}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1715,6 +1778,25 @@ function VolunteerProfileModal({ volunteer, onClose, onNeedHelp }) {
             <div style={{ fontSize: 13, color: COLOR.textMuted }}>{volunteer.isVerified ? 'Verified' : 'Unverified'}</div>
           </div>
         </div>
+
+        {volunteer.bookings && volunteer.bookings.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <h4 style={{ fontSize: 17, fontWeight: 800, color: COLOR.navyDark, margin: '0 0 8px 0' }}>
+              📅 Booked Times
+            </h4>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {volunteer.bookings.map((b, idx) => (
+                <span key={idx} style={{
+                  background: '#e0f2fe', color: '#0369a1',
+                  fontSize: 13, fontWeight: 700,
+                  padding: '6px 12px', borderRadius: 8,
+                }}>
+                  {new Date(b).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         <h4 style={{ fontSize: 17, fontWeight: 800, color: COLOR.navyDark }}>
           Community Feedback ({volunteer.reviews?.length || 0})

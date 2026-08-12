@@ -8,9 +8,28 @@ const CITIES = ['Madurai', 'Chennai', 'Bangalore', 'Mumbai', 'Delhi', 'Hyderabad
 
 const emptyForm = {
   fullName: '', email: '', password: '', phone: '',
-  city: '', addressText: '',
+  city: '', addressText: '', dateOfBirth: '',
   emergencyContactName: '', emergencyContactPhone: '',
 };
+
+const SENIOR_MIN_AGE = 58;
+
+function calculateAge(dateStr) {
+  const dob = new Date(dateStr);
+  if (isNaN(dob.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+  return age;
+}
+
+// Compute the latest date that makes someone exactly 58 today (for the max attr on the input)
+function getMaxDobForAge(minAge) {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - minAge);
+  return d.toISOString().split('T')[0]; // yyyy-mm-dd
+}
 
 export default function AuthPortal() {
   const { login } = useAuth();
@@ -45,6 +64,23 @@ export default function AuthPortal() {
         return;
       }
 
+      // --- Client-side senior age validation ---
+      if (role === 'SENIOR') {
+        if (!form.dateOfBirth) {
+          setError('Date of birth is required for Senior Citizens.');
+          return;
+        }
+        const age = calculateAge(form.dateOfBirth);
+        if (age === null) {
+          setError('Please enter a valid date of birth.');
+          return;
+        }
+        if (age < SENIOR_MIN_AGE) {
+          setError(`You must be at least ${SENIOR_MIN_AGE} years old to register as a Senior Citizen. Your current age: ${age}.`);
+          return;
+        }
+      }
+
       const { token, user } = await api.register({ ...form, role });
       login(token, user);
       routeAfterLogin(user);
@@ -75,12 +111,30 @@ export default function AuthPortal() {
     e.preventDefault();
     setError('');
     try {
+      // --- Client-side senior age validation for Google onboarding ---
+      if (role === 'SENIOR') {
+        if (!form.dateOfBirth) {
+          setError('Date of birth is required for Senior Citizens.');
+          return;
+        }
+        const age = calculateAge(form.dateOfBirth);
+        if (age === null) {
+          setError('Please enter a valid date of birth.');
+          return;
+        }
+        if (age < SENIOR_MIN_AGE) {
+          setError(`You must be at least ${SENIOR_MIN_AGE} years old to register as a Senior Citizen. Your current age: ${age}.`);
+          return;
+        }
+      }
+
       const res = await api.googleAuth({
         credential: googlePending.credential,
         role,
         city: form.city,
         addressText: form.addressText,
         phone: form.phone,
+        dateOfBirth: role === 'SENIOR' ? form.dateOfBirth : undefined,
       });
       login(res.token, res.user);
       routeAfterLogin(res.user);
@@ -494,6 +548,19 @@ export default function AuthPortal() {
                 <RoleTabs role={role} setRole={setRole} />
 
                 <OnboardingFields form={form} set={set} />
+                {role === 'SENIOR' && (
+                  <div className="nc-field">
+                    <label>Date of birth <span style={{color:'#e74c3c',fontWeight:700}}>*</span></label>
+                    <input
+                      type="date"
+                      required
+                      max={getMaxDobForAge(SENIOR_MIN_AGE)}
+                      value={form.dateOfBirth}
+                      onChange={(e) => set('dateOfBirth', e.target.value)}
+                    />
+                    <small style={{opacity:0.65,fontSize:'0.8rem',marginTop:4,display:'block'}}>You must be {SENIOR_MIN_AGE}+ years old to register as a Senior Citizen.</small>
+                  </div>
+                )}
                 <button type="submit" className="nc-btn--primary">Finish setup</button>
               </form>
             ) : (
@@ -529,6 +596,17 @@ export default function AuthPortal() {
                       <OnboardingFields form={form} set={set} />
                       {role === 'SENIOR' && (
                         <>
+                          <div className="nc-field">
+                            <label>Date of birth <span style={{color:'#e74c3c',fontWeight:700}}>*</span></label>
+                            <input
+                              type="date"
+                              required
+                              max={getMaxDobForAge(SENIOR_MIN_AGE)}
+                              value={form.dateOfBirth}
+                              onChange={(e) => set('dateOfBirth', e.target.value)}
+                            />
+                            <small style={{opacity:0.65,fontSize:'0.8rem',marginTop:4,display:'block'}}>You must be {SENIOR_MIN_AGE}+ years old to register as a Senior Citizen.</small>
+                          </div>
                           <div className="nc-field">
                             <label>Emergency contact name <span>(optional)</span></label>
                             <input value={form.emergencyContactName} onChange={(e) => set('emergencyContactName', e.target.value)} />

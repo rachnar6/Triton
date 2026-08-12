@@ -57,6 +57,20 @@ function resolveRole(email, requestedRole) {
   return requestedRole;
 }
 
+const SENIOR_MIN_AGE = 58;
+
+function calculateAge(dateOfBirth) {
+  const dob = new Date(dateOfBirth);
+  if (isNaN(dob.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age--;
+  }
+  return age;
+}
+
 function signToken(user) {
   return jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
     expiresIn: '30d',
@@ -79,6 +93,7 @@ router.post('/register', async (req, res) => {
       role,
       city,
       addressText,
+      dateOfBirth,
       emergencyContactName,
       emergencyContactPhone,
     } = req.body;
@@ -87,11 +102,27 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Missing required registration fields' });
     }
 
+    // --- Senior age gate ---
+    const finalRole = resolveRole(email, role);
+    if (finalRole === 'SENIOR') {
+      if (!dateOfBirth) {
+        return res.status(400).json({ error: 'Date of birth is required for Senior Citizens.' });
+      }
+      const age = calculateAge(dateOfBirth);
+      if (age === null) {
+        return res.status(400).json({ error: 'Invalid date of birth.' });
+      }
+      if (age < SENIOR_MIN_AGE) {
+        return res.status(400).json({
+          error: `You must be at least ${SENIOR_MIN_AGE} years old to register as a Senior Citizen. Your age: ${age}.`,
+        });
+      }
+    }
+
     const existing = await User.findOne({ email: email.toLowerCase() });
     if (existing) return res.status(409).json({ error: 'An account with this email already exists' });
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const finalRole = resolveRole(email, role);
 
     const user = await User.create({
       fullName,
@@ -101,6 +132,7 @@ router.post('/register', async (req, res) => {
       role: finalRole,
       city,
       addressText,
+      dateOfBirth: finalRole === 'SENIOR' ? new Date(dateOfBirth) : undefined,
       location: { type: 'Point', coordinates: [0, 0] },
       isVerified: finalRole === 'ADMIN',
       emergencyContactName,
@@ -143,7 +175,7 @@ router.post('/login', async (req, res) => {
 
 router.post('/google', async (req, res) => {
   try {
-    const { credential, role, city, addressText, phone, latitude, longitude } = req.body;
+    const { credential, role, city, addressText, phone, latitude, longitude, dateOfBirth } = req.body;
     if (!credential) return res.status(400).json({ error: 'Missing Google credential' });
 
     const ticket = await googleClient.verifyIdToken({
@@ -160,6 +192,23 @@ router.post('/google', async (req, res) => {
         return res.status(200).json({ profileComplete: false, googleProfile: { email, name, picture } });
       }
       const finalRole = resolveRole(email, role);
+
+      // --- Senior age gate for Google sign-up ---
+      if (finalRole === 'SENIOR') {
+        if (!dateOfBirth) {
+          return res.status(400).json({ error: 'Date of birth is required for Senior Citizens.' });
+        }
+        const age = calculateAge(dateOfBirth);
+        if (age === null) {
+          return res.status(400).json({ error: 'Invalid date of birth.' });
+        }
+        if (age < SENIOR_MIN_AGE) {
+          return res.status(400).json({
+            error: `You must be at least ${SENIOR_MIN_AGE} years old to register as a Senior Citizen. Your age: ${age}.`,
+          });
+        }
+      }
+
       const coords = (longitude !== undefined && latitude !== undefined)
         ? [parseFloat(longitude), parseFloat(latitude)]
         : [0, 0];
@@ -173,6 +222,7 @@ router.post('/google', async (req, res) => {
         role: finalRole,
         city,
         addressText,
+        dateOfBirth: finalRole === 'SENIOR' ? new Date(dateOfBirth) : undefined,
         location: { type: 'Point', coordinates: coords },
         isVerified: finalRole === 'ADMIN',
       });
@@ -313,12 +363,37 @@ router.get('/nearby-volunteers', requireAuth, async (req, res) => {
       .select('fullName phone profilePicture hoursVolunteered tasksCompleted badges city subRegion addressText isVerified reviews')
       .limit(20);
 
+    const now = new Date();
     const activeTasks = await Task.find({
-      status: { $in: ['ASSIGNED', 'IN_PROGRESS'] },
+      status: { $in: ['ASSIGNED', 'IN_PROGRESS', 'EN_ROUTE', 'ARRIVED'] },
       volunteer: { $exists: true },
-    }).select('volunteer');
+    }).select('volunteer status scheduledTime');
 
-    const busyVolunteerIds = new Set(activeTasks.map((t) => t.volunteer.toString()));
+    const busyVolunteerIds = new Set();
+    const volunteerBookings = {};
+
+    activeTasks.forEach((t) => {
+      const volIdStr = t.volunteer.toString();
+      if (t.scheduledTime) {
+        const schedTime = new Date(t.scheduledTime);
+        const diffMs = schedTime - now;
+        const oneHour = 60 * 60 * 1000;
+        const twoHours = 2 * 60 * 60 * 1000;
+        // Busy if currently within task execution window or in active transport status
+        const isBusyNow = (diffMs <= oneHour && diffMs >= -twoHours) || ['IN_PROGRESS', 'EN_ROUTE', 'ARRIVED'].includes(t.status);
+        if (isBusyNow) {
+          busyVolunteerIds.add(volIdStr);
+        }
+        if (schedTime > now) {
+          if (!volunteerBookings[volIdStr]) {
+            volunteerBookings[volIdStr] = [];
+          }
+          volunteerBookings[volIdStr].push(t.scheduledTime);
+        }
+      } else {
+        busyVolunteerIds.add(volIdStr);
+      }
+    });
 
     const sameSubRegion = [];
     const otherSubRegions = [];
@@ -326,6 +401,7 @@ router.get('/nearby-volunteers', requireAuth, async (req, res) => {
     allVolunteers.forEach((vol) => {
       const volObj = vol.toObject();
       volObj.isBusy = busyVolunteerIds.has(vol._id.toString());
+      volObj.bookings = volunteerBookings[vol._id.toString()] || [];
 
       // Calculate average star rating from past reviews
       if (volObj.reviews && volObj.reviews.length > 0) {

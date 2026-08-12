@@ -18,6 +18,7 @@ const UserSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true },
     passwordHash: { type: String },
     phone: { type: String, required: true },
+    dateOfBirth: { type: Date, default: null },
     role: { type: String, enum: ['SENIOR', 'VOLUNTEER', 'ADMIN'], required: true },
     city: { type: String, required: true },
     subRegion: { type: String, default: '' }, // e.g. "Palayamkottai", "Vannarpettai", "Melapalayam"
